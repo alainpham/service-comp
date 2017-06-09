@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Configures the Camel Context -->
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="        http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd        http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+	<bean class="org.apache.camel.spring.spi.BridgePropertyPlaceholderConfigurer"
+		id="props">
+		<property name="ignoreResourceNotFound" value="true" />
+		<property name="locations">
+			<list>
+				<value>classpath:app.properties</value>
+				<value>file:app.properties</value>
+				<value>file:${karaf.home}/etc/app.properties</value>
+			</list>
+		</property>
+	</bean>
+	<bean class="com.Article" id="article">
+		<property name="idArticle" value="1" />
+		<property name="libArticle" value="trucs" />
+		<property name="prixArticle" value="35.5" />
+	</bean>
+	<bean class="com.ArticleWrapper" id="articleWrapper">
+		<property name="article" ref="article" />
+	</bean>
+	<bean class="com.ProcessCurrency" id="processCurrency" />
+	<camelContext id="service-comp" xmlns="http://camel.apache.org/schema/spring">
+		<dataFormats>
+			<json enableFeatures="WRAP_ROOT_VALUE" id="articleDF" library="Jackson" />
+		</dataFormats>
+		<restConfiguration bindingMode="json" component="netty4-http"
+			enableCORS="true" host="localhost" port="8089" />
+		<rest id="svc" path="/">
+			<get id="queryArticleOp" uri="article/{id}">
+				<to uri="direct:queryArticleOp" />
+			</get>
+			<get id="loginSvcOp" uri="mock/login">
+				<to uri="direct:loginSvcOp" />
+			</get>
+			<get id="rawArticleOp" uri="mock/articles/{id}">
+				<to uri="direct:rawArticle" />
+			</get>
+		</rest>
+		<route id="queryArticleRoute">
+			<!-- Store initial Article ID -->
+			<!-- get loginToken -->
+			<!-- get call service to get Articles -->
+			<!-- call currency service to get change rate -->
+			<!-- apply new change rate -->
+			<from id="_from2" uri="direct:queryArticleOp" />
+			<setProperty id="saveArticleID" propertyName="articleID">
+				<simple>${headers.id}</simple>
+			</setProperty>
+			<log id="logQueryID" message="Query for id : ${property.articleID}" />
+			<to id="callLogin" uri="direct:login" />
+			<log id="logAuthToken" message="Auth token :${headers.Authorization}" />
+			<to id="callArticleService" uri="direct:articleServiceCaller" />
+			<to id="callCurrencyService" uri="direct:currencyServiceCaller" />
+			<process id="applyCurrencyRule" ref="processCurrency" />
+			<setBody id="sentEndResult">
+				<simple>${property.article}</simple>
+			</setBody>
+		</route>
+		<route id="articleServiceCallerRoute">
+			<!-- Query article -->
+			<from id="_from3" uri="direct:articleServiceCaller" />
+			<removeHeaders excludePattern="Authorization" id="_removeHeaders1"
+				pattern="*" />
+			<setHeader headerName="CamelHttpMethod" id="_setHeader1">
+				<constant>GET</constant>
+			</setHeader>
+			<setHeader headerName="CamelHttpPath" id="_setHeader2">
+				<simple>/articles/${property.articleID}</simple>
+			</setHeader>
+			<setBody id="_setBody1">
+				<simple>${null}</simple>
+			</setBody>
+			<log id="_log2" message="Headers bfore service call ${headers}" />
+			<to id="_to1" uri="{{svcEndpoint}}" />
+			<unmarshal id="_unmarshal1">
+				<json library="Jackson" unmarshalTypeName="com.ArticleWrapper" />
+			</unmarshal>
+			<setProperty id="_setProperty1" propertyName="article">
+				<simple>${body}</simple>
+			</setProperty>
+			<log id="_log3" message="${body.class} ${body}" />
+		</route>
+		<route id="currencyServiceCallerRoute">
+			<!-- Query currency -->
+			<from id="_from4" uri="direct:currencyServiceCaller" />
+			<removeHeaders id="_removeHeaders2" pattern="*" />
+			<setHeader headerName="CamelHttpMethod" id="_setHeader3">
+				<constant>GET</constant>
+			</setHeader>
+			<setHeader headerName="CamelHttpQuery" id="_setHeader4">
+				<simple>base=EUR</simple>
+			</setHeader>
+			<setBody id="_setBody2">
+				<simple>${null}</simple>
+			</setBody>
+			<to id="_to2" uri="{{apiFixerEndpoint}}" />
+			<!-- if want to marshal to Hashmap <unmarshal > <json library="Jackson" 
+				/> </unmarshal> -->
+			<unmarshal>
+				<json library="Jackson" />
+			</unmarshal>
+			<log message="${body[rates][USD]}"></log>
+			<marshal>
+				<json library="Jackson" />
+			</marshal>
+			<setProperty id="_setProperty2" propertyName="changeRate">
+				<jsonpath>$.rates.USD</jsonpath>
+			</setProperty>
+			<log id="_log4" message="Rate applied : ${property.changeRate}" />
+		</route>
+		<route id="loginRoute">
+			<from id="_from5" uri="direct:login" />
+			<removeHeaders id="_removeHeaders3" pattern="*" />
+			<setHeader headerName="CamelHttpMethod" id="_setHeader5">
+				<constant>GET</constant>
+			</setHeader>
+			<setHeader headerName="CamelHttpQuery" id="_setHeader6">
+				<simple>login=${properties:loginUsr}&amp;password=${properties:loginPwd}</simple>
+			</setHeader>
+			<to id="_to3" uri="{{loginEndPoint}}" />
+		</route>
+		<!-- Mock services -->
+		<route id="loginSvcRoute">
+			<from id="_from6" uri="direct:loginSvcOp" />
+			<log id="_log5" message="loggin in with headers : ${headers}" />
+			<setHeader headerName="Authorization" id="_setHeader7">
+				<simple>${headers.login}${random(0,10)}</simple>
+			</setHeader>
+			<removeHeaders excludePattern="Authorization" id="_removeHeaders4"
+				pattern="*" />
+		</route>
+		<route id="rawArticleRoute">
+			<from id="_from7" uri="direct:rawArticle" />
+			<log id="_log6" message="queried ${header.id}" />
+			<log id="_log7" message="Cheking auth header ${header.Authorization}" />
+			<setBody id="_setBody3">
+				<simple>ref:articleWrapper</simple>
+			</setBody>
+		</route>
+		<route id="alivePinger">
+			<from id="_from1" uri="timer:foo?period=15000" />
+			<log id="_log1" message="Hello I'm alive.." />
+		</route>
+		<route id="apiFixerMock">
+			<from id="_from8" uri="direct:apiFixerMock" />
+			<setBody id="_setBody4">
+				<constant>{"base":"EUR","date":"2016-11-23","rates":{"AUD":1.4294,"BGN":1.9558,"BRL":3.586,"CAD":1.426,"CHF":1.0731,"CNY":7.3157,"CZK":27.027,"DKK":7.4398,"GBP":0.85393,"HKD":8.2232,"HRK":7.528,"HUF":310.04,"IDR":14351.42,"ILS":4.1055,"INR":72.8745,"JPY":118.04,"KRW":1248.2,"MXN":21.834,"MYR":4.7122,"NOK":9.068,"NZD":1.5039,"PHP":52.899,"PLN":4.4154,"RON":4.5165,"RUB":68.1458,"SEK":9.7863,"SGD":1.5136,"THB":37.743,"TRY":3.5944,"USD":1.0602,"ZAR":14.9912}}</constant>
+			</setBody>
+		</route>
+	</camelContext>
+</beans>
